@@ -13,12 +13,12 @@ import config
 
 def search_studies_by_disease(disease_trait: str, max_results: int = 100) -> list:
     """
-    疾患名で GWAS Catalog のスタディを検索
+    疾患名で GWAS Catalog のスタディを検索 (EFO Trait または Disease Trait)
 
     Parameters
     ----------
     disease_trait : str
-        疾患名 (例: "Type 2 Diabetes")
+        疾患名 (例: "Type 2 Diabetes" または "type 2 diabetes mellitus")
     max_results : int
         最大取得件数
 
@@ -26,21 +26,40 @@ def search_studies_by_disease(disease_trait: str, max_results: int = 100) -> lis
     -------
     list : スタディ情報のリスト
     """
-    url = f"{config.GWAS_CATALOG_BASE_URL}/studies/search/findByDiseaseTrait"
-    params = {
+    url_efo = f"{config.GWAS_CATALOG_BASE_URL}/studies/search/findByEfoTrait"
+    params_efo = {
+        "efoTrait": disease_trait,
+        "page": 0,
+        "size": max_results,
+    }
+    
+    url_disease = f"{config.GWAS_CATALOG_BASE_URL}/studies/search/findByDiseaseTrait"
+    params_disease = {
         "diseaseTrait": disease_trait,
         "page": 0,
         "size": max_results,
     }
 
     try:
-        resp = requests.get(url, params=params, timeout=30)
+        # まず正式な EFO Trait (MONDO/EFOラベリング) として検索
+        resp = requests.get(url_efo, params=params_efo, timeout=30)
         resp.raise_for_status()
         data = resp.json()
+        
+        embedded = data.get("_embedded", {})
+        study_list = embedded.get("studies", [])
+        
+        # もしEFO Traitで0件なら、著者が報告したテキスト (Disease Trait) で再検索
+        if not study_list:
+            print(f"[GWAS] EFO Trait '{disease_trait}' でスタディが見つからないため、テキスト (Disease Trait) として再検索します...")
+            resp = requests.get(url_disease, params=params_disease, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            embedded = data.get("_embedded", {})
+            study_list = embedded.get("studies", [])
 
         studies = []
-        embedded = data.get("_embedded", {})
-        for study in embedded.get("studies", []):
+        for study in study_list:
             studies.append({
                 "study_id": study.get("accessionId", ""),
                 "title": study.get("publicationInfo", {}).get("title", ""),
