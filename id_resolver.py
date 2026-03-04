@@ -92,3 +92,49 @@ if __name__ == "__main__":
     print("-" * 40)
     print("Testing active MONDO ID for Type 2 Diabetes:")
     auto_resolve_disease("MONDO_0005148")
+
+def search_disease_id(query: str, max_results: int = 5):
+    """
+    キーワードから GWAS Catalog 推奨の EFO/MONDO ID を検索して表示するユーティリティ。
+    Jupyter Notebook上でユーザーが適切なIDを見つけるために使用する。
+    
+    Parameters
+    ----------
+    query : str
+        検索キーワード (例: "diabetes", "alzheimer")
+    max_results : int
+        表示する最大件数
+    """
+    print(f"'{query}' に関連するGWAS Catalog上の疾患IDを検索中...\n")
+    
+    # GWAS CatalogのTraits検索APIを使用
+    # EBI OLSよりGWASで実際に使われているIDを見つける方が確実なため
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://www.ebi.ac.uk/gwas/rest/api/efoTraits/search/findByTraitContainingIgnoreCase?trait={encoded_query}"
+    
+    try:
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            traits = data.get("_embedded", {}).get("efoTraits", [])
+            
+            if not traits:
+                print("該当する疾患は見つかりませんでした。別のキーワード(英語)で試してください。")
+                return
+                
+            print(f"=== 検索結果 (上位 {min(len(traits), max_results)} 件) ===")
+            for i, t in enumerate(traits[:max_results]):
+                trait_name = t.get("trait", "Unknown")
+                short_form = t.get("shortForm", "Unknown ID")
+                print(f"{i+1}. ID: {short_form} | 疾患名: {trait_name}")
+                
+            print("\n→ 使用するIDを下のセルの TARGET_DISEASE_ID にコピーして設定してください。")
+        else:
+            print(f"検索APIエラー: ステータスコード {resp.status_code}")
+    except Exception as e:
+        print(f"検索中にエラーが発生しました: {e}")
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "search":
+        search_disease_id(sys.argv[2])
