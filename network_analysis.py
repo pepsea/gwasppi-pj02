@@ -204,12 +204,85 @@ def propagate_flow_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
     return flow_scores
 
 
+def compute_rwr_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
+                       restart_prob: float = 0.3, max_iter: int = 100,
+                       tol: float = 1e-6) -> dict:
+    """
+    Random Walk with Restart (RWR) を計算し、シグナルをネットワーク上に伝播させる。
+    
+    Parameters
+    ----------
+    G : nx.Graph
+        PPI ネットワーク
+    gene_scores_df : pd.DataFrame
+        シードとする GWAS 遺伝子スコア
+    restart_prob : float
+        シードに戻る確率 (0〜1)
+    max_iter : int
+        最大反復回数
+    tol : float
+        収束判定の許容誤差
+        
+    Returns
+    -------
+    dict : {gene_symbol: rwr_score}
+    """
+    if G.number_of_nodes() == 0:
+        return {}
+        
+    print(f"[Network] RWR計算中: restart_prob={restart_prob}, max_iter={max_iter}")
+    
+    nodes = list(G.nodes())
+    node_idx = {n: i for i, n in enumerate(nodes)}
+    n_nodes = len(nodes)
+    
+    # 初期確率分布 p0 (シードスコア) の構築
+    p0 = np.zeros(n_nodes)
+    if gene_scores_df is not None and not gene_scores_df.empty:
+        score_dict = dict(zip(gene_scores_df["gene_symbol"], gene_scores_df["total_score"]))
+        for n in nodes:
+            if G.nodes[n].get("is_gwas", False):
+                p0[node_idx[n]] = score_dict.get(n, 1.0)
+                
+    sum_p0 = p0.sum()
+    if sum_p0 > 0:
+        p0 = p0 / sum_p0  # 確率分布として正規化
+    else:
+        p0 = np.ones(n_nodes) / n_nodes
+        
+    # 推移確率行列 M の構築
+    A = nx.adjacency_matrix(G, weight="weight")
+    deg = np.array(A.sum(axis=1)).flatten()
+    deg[deg == 0] = 1.0  # ゼロ割回避
+    
+    from scipy import sparse
+    D_inv = sparse.diags(1.0 / deg)
+    M = A @ D_inv  # M_ij = A_ij / deg_j
+    
+    # 反復計算
+    p_last = p0.copy()
+    for i in range(max_iter):
+        p_next = (1 - restart_prob) * M.dot(p_last) + restart_prob * p0
+        err = np.linalg.norm(p_next - p_last, ord=1)
+        if err < tol:
+            print(f"  -> {i+1} 回の反復で収束 (err: {err:.2e})")
+            p_last = p_next
+            break
+        p_last = p_next
+    else:
+        print(f"  -> 最大反復回数 {max_iter} に達しました (err: {err:.2e})")
+        
+    rwr_scores = {nodes[i]: p_last[i] for i in range(n_nodes)}
+    return rwr_scores
+
+
 def compute_integrated_scores(G: nx.Graph,
                               centrality_df: pd.DataFrame,
                               flow_scores: dict,
+                              rwr_scores: dict = None,
                               weights: dict = None) -> pd.DataFrame:
     """
-    中心性指標 + フロー伝播スコアを統合した総合スコアを計算
+    中心性指標 + フロー + RWR スコアを統合した総合スコアを計算
 
     Parameters
     ----------
@@ -218,22 +291,25 @@ def compute_integrated_scores(G: nx.Graph,
     centrality_df : pd.DataFrame
         中心性指標テーブル
     flow_scores : dict
-        フロー伝播スコア
+        単純フロー伝播スコア
+    rwr_scores : dict
+        Random Walk with Restart スコア
     weights : dict
         各指標の重み
-
+        
     Returns
     -------
     pd.DataFrame : 統合スコア
     """
     if weights is None:
         weights = {
-            "flow_score": 0.60,
+            "rwr_score": 0.40,
+            "flow_score": 0.30,
             "pagerank": 0.10,
             "betweenness_centrality": 0.10,
-            "degree_centrality": 0.10,
+            "degree_centrality": 0.05,
             "closeness_centrality": 0.05,
-            "eigenvector_centrality": 0.05,
+            "eigenvector_centrality": 0.00,
         }
 
     if centrality_df.empty:
@@ -241,9 +317,13 @@ def compute_integrated_scores(G: nx.Graph,
 
     df = centrality_df.copy()
     df["flow_score"] = df["gene_symbol"].map(flow_scores).fillna(0)
+    if rwr_scores:
+        df["rwr_score"] = df["gene_symbol"].map(rwr_scores).fillna(0)
+    else:
+        df["rwr_score"] = 0.0
 
     # 正規化 (min-max)
-    score_columns = ["flow_score", "pagerank", "betweenness_centrality",
+    score_columns = ["rwr_score", "flow_score", "pagerank", "betweenness_centrality",
                      "degree_centrality", "closeness_centrality", "eigenvector_centrality"]
 
     for col in score_columns:
