@@ -241,8 +241,10 @@ def score_genes(gwas_df: pd.DataFrame,
     gene_pvalues = gwas_df.groupby("gene_symbol")["p_value"].min().to_dict()
     gwas_gene_set = set(gene_pvalues.keys())
 
-    # GWAS遺伝子のみ (PPI遺伝子のスコアリングはRWRで行う)
+    # PPI遺伝子も含めた全遺伝子セット
     all_genes = set(gene_pvalues.keys())
+    if ppi_df is not None and not ppi_df.empty:
+        all_genes |= set(ppi_df["gene_a"]) | set(ppi_df["gene_b"])
 
     # スコア計算
     records = []
@@ -277,8 +279,16 @@ def score_genes(gwas_df: pd.DataFrame,
                 if gene_vars["is_regulatory"].any():
                     regulatory_score = weights["regulatory"]
 
-        # PPI マルチソーススコアは除外 (PPIの影響はRWRで評価する)
-        total = pval_score + lof_score + gof_score + missense_score + coding_score + regulatory_score
+        # PPI マルチソーススコア
+        ppi_score = 0.0
+        if ppi_df is not None and not ppi_df.empty:
+            gene_ppi = ppi_df[
+                (ppi_df["gene_a"] == gene) | (ppi_df["gene_b"] == gene)
+            ]
+            n_sources = gene_ppi["source"].nunique()
+            ppi_score = n_sources * weights["ppi_multi_source"]
+
+        total = pval_score + lof_score + gof_score + missense_score + coding_score + regulatory_score + ppi_score
 
         records.append({
             "gene_symbol": gene,
@@ -290,10 +300,12 @@ def score_genes(gwas_df: pd.DataFrame,
             "missense_score": round(missense_score, 3),
             "coding_score": round(coding_score, 3),
             "regulatory_score": round(regulatory_score, 3),
+            "ppi_score": round(ppi_score, 3),
             "total_score": round(total, 3),
         })
 
     result = pd.DataFrame(records).sort_values("total_score", ascending=False).reset_index(drop=True)
     n_gwas = result["is_gwas"].sum()
-    print(f"[Scorer] {len(result)} 遺伝子をスコアリング (GWAS: {n_gwas})")
+    n_ppi = len(result) - n_gwas
+    print(f"[Scorer] {len(result)} 遺伝子をスコアリング (GWAS: {n_gwas}, PPI: {n_ppi})")
     return result
