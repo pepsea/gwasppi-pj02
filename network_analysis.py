@@ -204,7 +204,7 @@ def propagate_flow_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
     return flow_scores
 
 
-def compute_rwr_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
+def compute_rwr_scores(G: nx.Graph,
                        restart_prob: float = 0.3, max_iter: int = 100,
                        tol: float = 1e-6) -> dict:
     """
@@ -214,8 +214,6 @@ def compute_rwr_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
     ----------
     G : nx.Graph
         PPI ネットワーク
-    gene_scores_df : pd.DataFrame
-        シードとする GWAS 遺伝子スコア
     restart_prob : float
         シードに戻る確率 (0〜1)
     max_iter : int
@@ -236,13 +234,11 @@ def compute_rwr_scores(G: nx.Graph, gene_scores_df: pd.DataFrame,
     node_idx = {n: i for i, n in enumerate(nodes)}
     n_nodes = len(nodes)
     
-    # 初期確率分布 p0 (シードスコア) の構築
+    # 初期確率分布 p0 の構築 (GWAS関連遺伝子を均等な開始点とする)
     p0 = np.zeros(n_nodes)
-    if gene_scores_df is not None and not gene_scores_df.empty:
-        score_dict = dict(zip(gene_scores_df["gene_symbol"], gene_scores_df["total_score"]))
-        for n in nodes:
-            if G.nodes[n].get("is_gwas", False):
-                p0[node_idx[n]] = score_dict.get(n, 1.0)
+    for n in nodes:
+        if G.nodes[n].get("is_gwas", False):
+            p0[node_idx[n]] = 1.0
                 
     sum_p0 = p0.sum()
     if sum_p0 > 0:
@@ -482,9 +478,9 @@ def layered_rwr_analysis(seed_genes: list,
             merged_ppi, seed_genes, gene_scores=score_dict
         )
 
-        # 3. RWR を実行
+        # 3. RWR を実行 (開始点はGWAS関連遺伝子)
         rwr_scores = compute_rwr_scores(
-            cumulative_G, gene_scores_df,
+            cumulative_G,
             restart_prob=restart_prob, max_iter=100
         )
 
