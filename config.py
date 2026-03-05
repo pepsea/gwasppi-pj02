@@ -36,7 +36,7 @@ BIOGRID_ACCESS_KEY = os.environ.get("BIOGRID_ACCESS_KEY", "e8f7cf92fae447b3e9d67
 # STRING
 STRING_BASE_URL = "https://string-db.org/api"
 STRING_SPECIES = 9606
-STRING_MIN_SCORE = 700  # デフォルト: Score > 0.7 (高信頼)
+STRING_MIN_SCORE = 500  # デフォルト: Score > 0.5 (中/高信頼)
 
 # Reactome
 REACTOME_CONTENT_URL = "https://reactome.org/ContentService"

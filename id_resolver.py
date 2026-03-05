@@ -107,25 +107,25 @@ def search_disease_id(query: str, max_results: int = 5):
     """
     print(f"'{query}' に関連するGWAS Catalog上の疾患IDを検索中...\n")
     
-    # GWAS CatalogのTraits検索APIを使用
-    # EBI OLSよりGWASで実際に使われているIDを見つける方が確実なため
+    # EBI OLS4の検索APIを使用して疾患(EFO / MONDO)を検索する
     encoded_query = urllib.parse.quote(query)
-    url = f"https://www.ebi.ac.uk/gwas/rest/api/efoTraits/search/findByTraitContainingIgnoreCase?trait={encoded_query}"
+    url = f"https://www.ebi.ac.uk/ols4/api/search?q={encoded_query}&ontology=efo,mondo&exact=false"
     
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            traits = data.get("_embedded", {}).get("efoTraits", [])
+            docs = data.get("response", {}).get("docs", [])
             
-            if not traits:
+            if not docs:
                 print("該当する疾患は見つかりませんでした。別のキーワード(英語)で試してください。")
                 return
                 
-            print(f"=== 検索結果 (上位 {min(len(traits), max_results)} 件) ===")
-            for i, t in enumerate(traits[:max_results]):
-                trait_name = t.get("trait", "Unknown")
-                short_form = t.get("shortForm", "Unknown ID")
+            print(f"=== 検索結果 (上位 {min(len(docs), max_results)} 件) ===")
+            for i, d in enumerate(docs[:max_results]):
+                trait_name = d.get("label", "Unknown")
+                short_form = d.get("short_form", "Unknown ID")
+                # 疾患名とIDを表示 (GWAS Catalog 検索用のアノテーションとして)
                 print(f"{i+1}. ID: {short_form} | 疾患名: {trait_name}")
                 
             print("\n→ 使用するIDを下のセルの TARGET_DISEASE_ID にコピーして設定してください。")
