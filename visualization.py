@@ -29,16 +29,16 @@ def create_sankey_diagram(gwas_df: pd.DataFrame,
                           top_n_pathways: int = 15,
                           save_path: str = None) -> go.Figure:
     """
-    SNP → SNP関連遺伝子 のサンキーダイアグラム
+    SNP → GWAS関連遺伝子 → PPI重要遺伝子 のサンキーダイアグラム
 
     Parameters
     ----------
     gwas_df : pd.DataFrame
         GWAS SNP データ
     ppi_df : pd.DataFrame
-        (未使用、互換性のため保持)
+        PPI インタラクション
     key_genes_df : pd.DataFrame
-        (未使用、互換性のため保持)
+        重要遺伝子リスト
     enrichment_df : pd.DataFrame
         (未使用、互換性のため保持)
     top_n_pathways : int
@@ -64,12 +64,14 @@ def create_sankey_diagram(gwas_df: pd.DataFrame,
             labels.append(name)
         return node_index[name]
 
-    # SNP → GWAS遺伝子
+    # Layer 1: SNP → GWAS遺伝子
+    gwas_genes = set()
     if not gwas_df.empty:
         top_snps = gwas_df.sort_values("p_value").head(50)
         for _, row in top_snps.iterrows():
             snp = row["rsid"]
             gene = row["gene_symbol"]
+            gwas_genes.add(gene)
 
             src = get_node_idx(f"SNP:{snp}")
             tgt = get_node_idx(gene)
@@ -78,13 +80,41 @@ def create_sankey_diagram(gwas_df: pd.DataFrame,
             values.append(max(1, -np.log10(max(row["p_value"], 1e-300))))
             colors.append("rgba(31, 119, 180, 0.4)")
 
+    # Layer 2: GWAS遺伝子 → PPI重要遺伝子
+    key_gene_set = set()
+    if key_genes_df is not None and not key_genes_df.empty:
+        key_gene_set = set(key_genes_df["gene_symbol"])
+
+    if ppi_df is not None and not ppi_df.empty:
+        for _, row in ppi_df.iterrows():
+            gene_a = row["gene_a"]
+            gene_b = row["gene_b"]
+
+            # GWAS遺伝子 → 重要PPI遺伝子のフロー
+            if gene_a in gwas_genes and gene_b in key_gene_set and gene_b not in gwas_genes:
+                src = get_node_idx(gene_a)
+                tgt = get_node_idx(gene_b)
+                sources.append(src)
+                targets.append(tgt)
+                values.append(1)
+                colors.append("rgba(255, 127, 14, 0.4)")
+            elif gene_b in gwas_genes and gene_a in key_gene_set and gene_a not in gwas_genes:
+                src = get_node_idx(gene_b)
+                tgt = get_node_idx(gene_a)
+                sources.append(src)
+                targets.append(tgt)
+                values.append(1)
+                colors.append("rgba(255, 127, 14, 0.4)")
+
     # ノードの色分け
     node_colors = []
     for label in labels:
         if label.startswith("SNP:"):
-            node_colors.append("#1f77b4")
+            node_colors.append("#1f77b4")   # 青: SNP
+        elif label in gwas_genes:
+            node_colors.append("#ff7f0e")   # オレンジ: GWAS遺伝子
         else:
-            node_colors.append("#ff7f0e")
+            node_colors.append("#d62728")   # 赤: PPI重要遺伝子
 
     fig = go.Figure(data=[go.Sankey(
         node=dict(
@@ -103,10 +133,10 @@ def create_sankey_diagram(gwas_df: pd.DataFrame,
     )])
 
     fig.update_layout(
-        title="GWAS SNP → 関連遺伝子",
+        title="GWAS Flow: SNP → 関連遺伝子 → PPI重要遺伝子",
         font_size=11,
         height=max(500, len(labels) * 12),
-        width=900,
+        width=1000,
         margin=dict(l=20, r=20, t=40, b=20),
     )
 
