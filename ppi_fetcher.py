@@ -165,6 +165,21 @@ def fetch_biogrid_interactions(gene_symbols: list, access_key: str = None) -> pd
 
             for _, interaction in data.items():
                 if isinstance(interaction, dict):
+                    sys = interaction.get("EXPERIMENTAL_SYSTEM", "")
+                    
+                    # ORCS (CRISPR screens) に関連する実験系のみを抽出
+                    # 主に遺伝的相互作用 (Genetic Interactions) がCRISPRスクリーンで取得されるため、
+                    # 以下のシステム等を含める
+                    orcs_systems = {
+                        "Synthetic Lethality", "Synthetic Growth Defect", 
+                        "Synthetic Rescue", "Phenotypic Enhancement", 
+                        "Phenotypic Suppression", "Positive Genetic", "Negative Genetic",
+                        "Dosage Rescue"
+                    }
+                    
+                    if sys not in orcs_systems:
+                        continue
+                        
                     gene_a = interaction.get("OFFICIAL_SYMBOL_A", "").upper()
                     gene_b = interaction.get("OFFICIAL_SYMBOL_B", "").upper()
                     if gene_a and gene_b and gene_a != gene_b:
@@ -172,7 +187,7 @@ def fetch_biogrid_interactions(gene_symbols: list, access_key: str = None) -> pd
                             "gene_a": gene_a,
                             "gene_b": gene_b,
                             "source": "BioGRID",
-                            "interaction_type": interaction.get("EXPERIMENTAL_SYSTEM", "physical"),
+                            "interaction_type": sys,
                             "score": 1.0,
                         })
 
