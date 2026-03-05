@@ -220,7 +220,7 @@ def score_genes(gwas_df: pd.DataFrame,
                 variant_classifications: pd.DataFrame = None,
                 ppi_df: pd.DataFrame = None) -> pd.DataFrame:
     """
-    遺伝子の総合スコアを計算 (GWAS遺伝子 + PPI遺伝子)
+    遺伝子の総合スコアを計算 (GWAS P値 + VEPアノテーション)
 
     Parameters
     ----------
@@ -229,7 +229,7 @@ def score_genes(gwas_df: pd.DataFrame,
     variant_classifications : pd.DataFrame
         classify_variant_effects の出力
     ppi_df : pd.DataFrame
-        PPI データ
+        PPI データ (互換性のため保持、スコアには使用しない)
 
     Returns
     -------
@@ -241,10 +241,8 @@ def score_genes(gwas_df: pd.DataFrame,
     gene_pvalues = gwas_df.groupby("gene_symbol")["p_value"].min().to_dict()
     gwas_gene_set = set(gene_pvalues.keys())
 
-    # PPI遺伝子も含めた全遺伝子セット
+    # GWAS遺伝子のみ (PPI遺伝子のスコアリングはRWRで行う)
     all_genes = set(gene_pvalues.keys())
-    if ppi_df is not None and not ppi_df.empty:
-        all_genes |= set(ppi_df["gene_a"]) | set(ppi_df["gene_b"])
 
     # スコア計算
     records = []
@@ -252,11 +250,11 @@ def score_genes(gwas_df: pd.DataFrame,
     for gene in sorted(all_genes):
         is_gwas = gene in gwas_gene_set
 
-        # GWAS P値スコア (PPI遺伝子は0)
+        # GWAS P値スコア
         p_val = gene_pvalues.get(gene, 1.0)
         pval_score = calculate_gwas_pvalue_score(p_val) * weights["gwas_pvalue"] if is_gwas else 0.0
 
-        # バリアント影響度スコア
+        # バリアント影響度スコア (VEP)
         lof_score = 0.0
         gof_score = 0.0
         missense_score = 0.0
@@ -279,16 +277,8 @@ def score_genes(gwas_df: pd.DataFrame,
                 if gene_vars["is_regulatory"].any():
                     regulatory_score = weights["regulatory"]
 
-        # PPI マルチソーススコア
-        ppi_score = 0.0
-        if ppi_df is not None and not ppi_df.empty:
-            gene_ppi = ppi_df[
-                (ppi_df["gene_a"] == gene) | (ppi_df["gene_b"] == gene)
-            ]
-            n_sources = gene_ppi["source"].nunique()
-            ppi_score = n_sources * weights["ppi_multi_source"]
-
-        total = pval_score + lof_score + gof_score + missense_score + coding_score + regulatory_score + ppi_score
+        # PPI マルチソーススコアは除外 (PPIの影響はRWRで評価する)
+        total = pval_score + lof_score + gof_score + missense_score + coding_score + regulatory_score
 
         records.append({
             "gene_symbol": gene,
@@ -300,12 +290,10 @@ def score_genes(gwas_df: pd.DataFrame,
             "missense_score": round(missense_score, 3),
             "coding_score": round(coding_score, 3),
             "regulatory_score": round(regulatory_score, 3),
-            "ppi_score": round(ppi_score, 3),
             "total_score": round(total, 3),
         })
 
     result = pd.DataFrame(records).sort_values("total_score", ascending=False).reset_index(drop=True)
     n_gwas = result["is_gwas"].sum()
-    n_ppi = len(result) - n_gwas
-    print(f"[Scorer] {len(result)} 遺伝子をスコアリング (GWAS: {n_gwas}, PPI: {n_ppi})")
+    print(f"[Scorer] {len(result)} 遺伝子をスコアリング (GWAS: {n_gwas})")
     return result

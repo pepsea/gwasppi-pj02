@@ -394,3 +394,152 @@ def select_key_genes(integrated_scores_df: pd.DataFrame,
     print(f"[Network] 重要遺伝子: {len(selected)} (GWAS: {n_gwas}, PPI: {n_ppi})")
 
     return selected
+
+
+def layered_rwr_analysis(seed_genes: list,
+                         gene_scores_df: pd.DataFrame,
+                         ppi_fetch_func,
+                         layers: int = 2,
+                         top_n_per_layer: int = 30,
+                         restart_prob: float = 0.3,
+                         sources: list = None,
+                         string_min_score: int = None) -> dict:
+    """
+    階層別 RWR 解析: 1階層ずつ PPI を展開し、RWR で重要遺伝子を選抜してから次の階層へ進む。
+
+    Parameters
+    ----------
+    seed_genes : list
+        初期シード遺伝子 (GWAS 関連遺伝子)
+    gene_scores_df : pd.DataFrame
+        GWAS 遺伝子スコア (columns: gene_symbol, total_score)
+    ppi_fetch_func : callable
+        PPI 取得関数 (ppi_fetcher.fetch_all_ppi)
+    layers : int
+        PPI 階層数
+    top_n_per_layer : int
+        各階層で選抜する上位遺伝子数
+    restart_prob : float
+        RWR の restart 確率
+    sources : list
+        PPI ソース
+    string_min_score : int
+        STRING 閾値
+
+    Returns
+    -------
+    dict :
+        'G': 最終ネットワーク (nx.Graph),
+        'all_ppi_df': 全階層の PPI DataFrame,
+        'rwr_scores': 最終 RWR スコア,
+        'flow_scores': 最終フロースコア,
+        'centrality_df': 中心性指標,
+        'integrated_scores_df': 統合スコア,
+        'key_genes_df': 重要遺伝子,
+        'layer_results': 各層の結果リスト,
+    """
+    import ppi_fetcher as _ppi
+
+    print(f"\n{'='*60}")
+    print(f"階層別 RWR 解析: {layers} 階層, 各層 Top {top_n_per_layer}")
+    print(f"シード遺伝子: {len(seed_genes)}")
+    print(f"{'='*60}")
+
+    current_seeds = list(set(g.upper() for g in seed_genes))
+    all_ppi_dfs = []
+    layer_results = []
+    cumulative_G = nx.Graph()
+
+    # シードスコアの辞書
+    score_dict = {}
+    if gene_scores_df is not None and not gene_scores_df.empty:
+        score_dict = dict(zip(gene_scores_df["gene_symbol"], gene_scores_df["total_score"]))
+
+    for layer_num in range(1, layers + 1):
+        print(f"\n{'─'*40}")
+        print(f"📍 Layer {layer_num}/{layers}: クエリ遺伝子 {len(current_seeds)}")
+        print(f"{'─'*40}")
+
+        # 1. この階層の PPI を取得
+        layer_ppi = _ppi.fetch_all_ppi(
+            current_seeds,
+            sources=sources,
+            string_min_score=string_min_score,
+        )
+
+        if layer_ppi.empty:
+            print(f"  ⚠️ Layer {layer_num}: PPI インタラクションなし、終了")
+            break
+
+        layer_ppi["layer"] = layer_num
+        all_ppi_dfs.append(layer_ppi)
+
+        # 2. 累積ネットワークを構築
+        merged_ppi = pd.concat(all_ppi_dfs, ignore_index=True)
+        merged_ppi = merged_ppi.drop_duplicates(subset=["gene_a", "gene_b", "source"])
+
+        cumulative_G = build_ppi_network(
+            merged_ppi, seed_genes, gene_scores=score_dict
+        )
+
+        # 3. RWR を実行
+        rwr_scores = compute_rwr_scores(
+            cumulative_G, gene_scores_df,
+            restart_prob=restart_prob, max_iter=100
+        )
+
+        # 4. 中心性指標
+        centrality_df = compute_centrality_metrics(cumulative_G)
+
+        # 5. フロー伝播
+        flow_scores = propagate_flow_scores(
+            cumulative_G, gene_scores_df, damping=0.5, iterations=5
+        )
+
+        # 6. 統合スコア
+        integrated_df = compute_integrated_scores(
+            cumulative_G, centrality_df, flow_scores, rwr_scores=rwr_scores
+        )
+
+        # 7. この層の上位遺伝子を選抜
+        #    シード遺伝子 + RWRスコア上位の非シード遺伝子
+        non_seed = integrated_df[~integrated_df["gene_symbol"].isin(seed_genes)]
+        top_this_layer = non_seed.head(top_n_per_layer)["gene_symbol"].tolist()
+
+        layer_result = {
+            "layer": layer_num,
+            "n_interactions": len(layer_ppi),
+            "n_nodes": cumulative_G.number_of_nodes(),
+            "top_genes": top_this_layer[:10],
+        }
+        layer_results.append(layer_result)
+
+        print(f"  ✅ Layer {layer_num} 結果:")
+        print(f"     累積ノード: {cumulative_G.number_of_nodes()}, エッジ: {cumulative_G.number_of_edges()}")
+        print(f"     選抜遺伝子 (Top 10): {top_this_layer[:10]}")
+
+        # 8. 次の層にはこの層の上位遺伝子だけをシードとして展開
+        if layer_num < layers:
+            current_seeds = top_this_layer
+            if not current_seeds:
+                print(f"  ⚠️ 次の階層に展開する遺伝子がありません。終了")
+                break
+
+    # 最終結果をまとめて返す
+    all_ppi_df = pd.concat(all_ppi_dfs, ignore_index=True) if all_ppi_dfs else pd.DataFrame()
+
+    print(f"\n{'='*60}")
+    print(f"階層別 RWR 完了:")
+    print(f"  最終ネットワーク: {cumulative_G.number_of_nodes()} ノード, {cumulative_G.number_of_edges()} エッジ")
+    print(f"  処理した階層数: {len(layer_results)}")
+    print(f"{'='*60}")
+
+    return {
+        "G": cumulative_G,
+        "all_ppi_df": all_ppi_df,
+        "rwr_scores": rwr_scores if 'rwr_scores' in dir() else {},
+        "flow_scores": flow_scores if 'flow_scores' in dir() else {},
+        "centrality_df": centrality_df if 'centrality_df' in dir() else pd.DataFrame(),
+        "integrated_scores_df": integrated_df if 'integrated_df' in dir() else pd.DataFrame(),
+        "layer_results": layer_results,
+    }
